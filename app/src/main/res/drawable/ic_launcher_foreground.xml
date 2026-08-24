@@ -1,0 +1,8 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Keep the complete supplied 512x512 artwork inside the adaptive-icon safe zone. -->
+    <item
+        android:width="88dp"
+        android:height="88dp"
+        android:gravity="center"
+        android:drawable="@drawable/ic_app_logo" />
+</layer-list>

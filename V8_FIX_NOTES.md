@@ -33,5 +33,18 @@
 - A dedicated monochrome notification icon was added for the status bar.
 
 ## Version
-- Android app versionCode: 8
-- Android app versionName: 8.0
+- Android app versionCode: 9
+- Android app versionName: 8.1
+
+
+## V8.1 — Background notification hardening
+- Foreground playback service is promoted before audio starts, avoiding Android 12+/target 36 foreground-service timing races.
+- `SultanMediaService` explicitly survives Activity task removal while playback is active.
+- Media3 `MediaSession` remains attached to the singleton ExoPlayer, so system notification controls operate without reopening the Activity.
+- Previous/Play-Pause/Next are provided by the MediaSession transport commands and operate on the active ExoPlayer queue.
+- Fixed duplicate first-track play-history increments caused by recording both queue-start and media-item-transition.
+- Search history now records the completed query after a short debounce instead of every typed character.
+- Folder grouping now uses the complete parent path; album grouping now distinguishes album title by artist.
+- Audio effects are recreated when ExoPlayer receives a new audio session.
+- Sleep timer rejects invalid/non-positive durations safely.
+- Editing song metadata without selecting a new cover now preserves the previously saved custom artwork.

@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -67,6 +69,7 @@ class SultanMainViewModel(application: Application) : AndroidViewModel(applicati
     // Search & Filtering
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+    private var searchHistoryJob: Job? = null
 
     val searchHistory: StateFlow<List<String>> = preferencesRepository.searchHistory
 
@@ -176,8 +179,16 @@ class SultanMainViewModel(application: Application) : AndroidViewModel(applicati
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
-        if (query.isNotBlank()) {
-            preferencesRepository.addSearchHistory(query)
+        searchHistoryJob?.cancel()
+        val value = query.trim()
+        if (value.isNotBlank()) {
+            // Save the completed query, not every keystroke ("s", "su", "sul", ...).
+            searchHistoryJob = viewModelScope.launch {
+                delay(450)
+                if (_searchQuery.value.trim().equals(value, ignoreCase = true)) {
+                    preferencesRepository.addSearchHistory(value)
+                }
+            }
         }
     }
 

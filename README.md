@@ -40,3 +40,10 @@ Playback is exposed through a single Media3 `MediaSession`. The system media not
 ## Audio Studio memory model
 
 V8 does not decode an entire song into a giant `ShortArray`. Audio is decoded and passed through Media3's streaming `SonicAudioProcessor` and chunked DSP processing, then written to a temporary PCM file before the final WAV is published. This is intended to make long-track exports much safer on phones with limited RAM.
+
+
+## V8.1 Background Playback
+- Music continues after the Activity is swiped away/closed from the recent-apps screen while playback is active.
+- The Media3 foreground playback service remains alive and its MediaSession stays connected to the same ExoPlayer queue.
+- Notification/lock-screen transport controls provide play/pause, previous and next without reopening the app.
+- Foreground service promotion happens before starting playback to satisfy modern Android foreground-service timing.

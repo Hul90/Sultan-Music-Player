@@ -88,11 +88,14 @@ class SultanMediaService : MediaSessionService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Keep playback alive when the user swipes the Activity away. MediaSessionService owns
-        // the foreground lifecycle while ExoPlayer is actively playing.
-        if (!SultanPlayerManager.getInstance(this).exoPlayer.isPlaying) {
-            super.onTaskRemoved(rootIntent)
-        }
+        // The Activity task being dismissed must NOT terminate active music playback. The
+        // MediaSessionService remains the owner of the foreground playback session, so its
+        // notification continues to expose Play/Pause/Previous/Next controls.
+        val player = SultanPlayerManager.getInstance(this).exoPlayer
+        if (player.isPlaying) return
+
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {

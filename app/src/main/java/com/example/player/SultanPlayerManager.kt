@@ -126,6 +126,7 @@ class SultanPlayerManager private constructor(private val context: Context) {
     private var onSongEndedCallback: (() -> Unit)? = null
     private var onSongPlayedCallback: ((Long) -> Unit)? = null
     private var fallbackAttemptedMediaId: String? = null
+    private var audioEffectsSessionId: Int = C.AUDIO_SESSION_ID_UNSET
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, intent: Intent?) {
@@ -281,13 +282,28 @@ class SultanPlayerManager private constructor(private val context: Context) {
 
         val validIndex = startIndex.coerceIn(0, songs.size - 1)
         val targetSong = songs[validIndex]
-
         val mediaItems = songs.map(::mediaItemFor)
 
+        // Update the in-memory queue before ExoPlayer emits transition callbacks. This prevents
+        // the initial callback from seeing an empty/old queue and losing the play-history event.
+        _playbackState.value = _playbackState.value.copy(
+            queue = songs,
+            queueIndex = validIndex,
+            currentSong = targetSong,
+            isPlaying = false,
+            currentPositionMs = 0L,
+            durationMs = targetSong.durationMs,
+            errorMessage = null
+        )
+
         try {
+            // Promote the playback service BEFORE starting audio. The service immediately enters
+            // foreground in onCreate(), avoiding Android 12+/target 36 foreground-service timing races.
+            ensurePlaybackServiceStarted()
             exoPlayer.setMediaItems(mediaItems, validIndex, 0L)
             exoPlayer.prepare()
             exoPlayer.play()
+            _playbackState.value = _playbackState.value.copy(isPlaying = true)
         } catch (e: Exception) {
             Log.e("SultanPlayerManager", "Failed to start playback", e)
             _playbackState.value = _playbackState.value.copy(
@@ -295,33 +311,19 @@ class SultanPlayerManager private constructor(private val context: Context) {
                 isBuffering = false,
                 errorMessage = "Playback failed: ${e.message ?: e.javaClass.simpleName}"
             )
-            return
         }
 
-        // IMPORTANT: start the MediaSessionService only after playback has actually started.
-        // Starting a foreground service before it has an active media session can trigger
-        // Android's foreground-service timeout and close the app.
-        ensurePlaybackServiceStarted()
-
-        _playbackState.value = _playbackState.value.copy(
-            queue = songs,
-            queueIndex = validIndex,
-            currentSong = targetSong,
-            isPlaying = true,
-            currentPositionMs = 0L,
-            durationMs = targetSong.durationMs
-        )
-
-        onSongPlayedCallback?.invoke(targetSong.id)
+        // onMediaItemTransition() records the play event. Recording only there prevents the
+        // first song from being counted twice when a new queue is created.
     }
 
     fun playSong(song: Song) {
         val currentQueue = _playbackState.value.queue
         val existingIndex = currentQueue.indexOfFirst { it.id == song.id }
         if (existingIndex != -1) {
+            ensurePlaybackServiceStarted()
             exoPlayer.seekTo(existingIndex, 0L)
             exoPlayer.play()
-            ensurePlaybackServiceStarted()
             _playbackState.value = _playbackState.value.copy(
                 queueIndex = existingIndex,
                 currentSong = song,
@@ -506,8 +508,12 @@ class SultanPlayerManager private constructor(private val context: Context) {
 
     // --- SLEEP TIMER ---
     fun startSleepTimer(minutes: Int, fadeOut: Boolean = true) {
+        if (minutes <= 0) {
+            cancelSleepTimer()
+            return
+        }
         cancelSleepTimer()
-        val totalMs = minutes * 60 * 1000L
+        val totalMs = minutes.toLong().coerceAtMost(Int.MAX_VALUE.toLong()) * 60_000L
 
         sleepTimer = object : CountDownTimer(totalMs, 1000L) {
             override fun onTick(millisUntilFinished: Long) {
@@ -540,53 +546,72 @@ class SultanPlayerManager private constructor(private val context: Context) {
     // Android audio effects are attached to an audio session. The session may be unset during
     // application startup, so effects are created lazily after ExoPlayer has an active session.
     private fun ensureAudioEffects() {
-        if (equalizer != null && bassBoost != null && virtualizer != null) return
         try {
             val audioSessionId = exoPlayer.audioSessionId
-            if (audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
-                equalizer = Equalizer(0, audioSessionId).apply {
-                    enabled = true
-                }
-                bassBoost = BassBoost(0, audioSessionId).apply {
-                    enabled = true
-                    setStrength(_equalizerState.value.bassBoostStrength)
-                }
-                virtualizer = Virtualizer(0, audioSessionId).apply {
-                    enabled = true
-                    setStrength(_equalizerState.value.virtualizerStrength)
-                }
+            if (audioSessionId == C.AUDIO_SESSION_ID_UNSET) return
 
-                equalizer?.let { eq ->
-                    val bands = mutableListOf<EqualizerBand>()
-                    val numBands = eq.numberOfBands
-                    val minLevel = eq.bandLevelRange[0]
-                    val maxLevel = eq.bandLevelRange[1]
+            // Audio effects belong to a specific Android audio session. Recreate them when
+            // ExoPlayer changes sessions instead of leaving effects attached to an obsolete one.
+            if (audioEffectsSessionId == audioSessionId &&
+                equalizer != null && bassBoost != null && virtualizer != null
+            ) return
 
-                    for (i in 0 until numBands) {
-                        val bandIdx = i.toShort()
-                        val freqHz = eq.getCenterFreq(bandIdx) / 1000
-                        val currentLevel = eq.getBandLevel(bandIdx)
-                        bands.add(
-                            EqualizerBand(
-                                bandIndex = bandIdx,
-                                centerFreqHz = freqHz,
-                                minLevelMilliBel = minLevel,
-                                maxLevelMilliBel = maxLevel,
-                                currentLevelMilliBel = currentLevel
-                            )
+            releaseAudioEffects()
+            audioEffectsSessionId = audioSessionId
+
+            equalizer = Equalizer(0, audioSessionId).apply {
+                enabled = true
+            }
+            bassBoost = BassBoost(0, audioSessionId).apply {
+                enabled = true
+                setStrength(_equalizerState.value.bassBoostStrength)
+            }
+            virtualizer = Virtualizer(0, audioSessionId).apply {
+                enabled = true
+                setStrength(_equalizerState.value.virtualizerStrength)
+            }
+
+            equalizer?.let { eq ->
+                val bands = mutableListOf<EqualizerBand>()
+                val numBands = eq.numberOfBands
+                val minLevel = eq.bandLevelRange[0]
+                val maxLevel = eq.bandLevelRange[1]
+
+                for (i in 0 until numBands) {
+                    val bandIdx = i.toShort()
+                    val freqHz = eq.getCenterFreq(bandIdx) / 1000
+                    val currentLevel = eq.getBandLevel(bandIdx)
+                    bands.add(
+                        EqualizerBand(
+                            bandIndex = bandIdx,
+                            centerFreqHz = freqHz,
+                            minLevelMilliBel = minLevel,
+                            maxLevelMilliBel = maxLevel,
+                            currentLevelMilliBel = currentLevel
                         )
-                    }
-
-                    _equalizerState.value = _equalizerState.value.copy(
-                        isEnabled = eq.enabled,
-                        bands = bands
                     )
                 }
+
+                _equalizerState.value = _equalizerState.value.copy(
+                    isEnabled = eq.enabled,
+                    bands = bands
+                )
             }
         } catch (e: Exception) {
-            e.printStackTrace()
-            // Graceful software fallback: keep default bands without crashing
+            Log.w("SultanPlayerManager", "Audio effects unavailable", e)
+            releaseAudioEffects()
+            // Graceful software fallback: keep default bands without crashing.
         }
+    }
+
+    private fun releaseAudioEffects() {
+        try { equalizer?.release() } catch (_: Exception) {}
+        try { bassBoost?.release() } catch (_: Exception) {}
+        try { virtualizer?.release() } catch (_: Exception) {}
+        equalizer = null
+        bassBoost = null
+        virtualizer = null
+        audioEffectsSessionId = C.AUDIO_SESSION_ID_UNSET
     }
 
     fun setEqualizerEnabled(enabled: Boolean) {
@@ -678,12 +703,7 @@ class SultanPlayerManager private constructor(private val context: Context) {
         }
         cancelSleepTimer()
         positionTrackerJob?.cancel()
-        equalizer?.release()
-        bassBoost?.release()
-        virtualizer?.release()
-        equalizer = null
-        bassBoost = null
-        virtualizer = null
+        releaseAudioEffects()
         mediaSession.release()
         exoPlayer.release()
         synchronized(SultanPlayerManager::class.java) {

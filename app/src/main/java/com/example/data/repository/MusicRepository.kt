@@ -229,6 +229,7 @@ class MusicRepository(
         comment: String,
         customArtUri: Uri?
     ) = withContext(Dispatchers.IO) {
+        val existingOverride = musicDao.getMetadataOverride(songId)
         val override = SongMetadataOverrideEntity(
             songId = songId,
             title = title.trim(),
@@ -237,7 +238,9 @@ class MusicRepository(
             genre = genre.trim(),
             year = year,
             trackNumber = trackNumber,
-            customArtUri = customArtUri?.toString(),
+            // Null means "the user did not pick a new cover". Keep the previous persisted
+            // cover instead of accidentally deleting it when only text metadata is edited.
+            customArtUri = customArtUri?.toString() ?: existingOverride?.customArtUri,
             composer = composer.trim(),
             comment = comment.trim()
         )

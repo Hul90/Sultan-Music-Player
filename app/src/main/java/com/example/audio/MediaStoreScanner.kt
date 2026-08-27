@@ -151,20 +151,23 @@ object MediaStoreScanner {
     }
 
     fun groupIntoAlbums(songs: List<Song>): List<Album> {
-        return songs.groupBy { it.album }
-            .map { (albumTitle, albumSongs) ->
-                val firstSong = albumSongs.first()
-                Album(
-                    id = firstSong.id,
-                    title = albumTitle,
-                    artist = firstSong.artist,
-                    songCount = albumSongs.size,
-                    albumArtUri = firstSong.albumArtUri,
-                    albumArtResId = firstSong.albumArtResId,
-                    year = albumSongs.maxOfOrNull { it.year } ?: 0
-                )
-            }
-            .sortedBy { it.title.lowercase() }
+        // Album names are not globally unique. Include artist/albumArtist in the grouping key
+        // so two unrelated albums with the same title do not get merged together.
+        return songs.groupBy {
+            val artistKey = it.albumArtist.ifBlank { it.artist }.trim().lowercase()
+            it.album.trim().lowercase() to artistKey
+        }.map { (_, albumSongs) ->
+            val firstSong = albumSongs.first()
+            Album(
+                id = firstSong.id,
+                title = firstSong.album,
+                artist = firstSong.albumArtist.ifBlank { firstSong.artist },
+                songCount = albumSongs.size,
+                albumArtUri = firstSong.albumArtUri,
+                albumArtResId = firstSong.albumArtResId,
+                year = albumSongs.maxOfOrNull { it.year } ?: 0
+            )
+        }.sortedBy { it.title.lowercase() }
     }
 
     fun groupIntoArtists(songs: List<Song>): List<Artist> {
@@ -183,17 +186,22 @@ object MediaStoreScanner {
     }
 
     fun groupIntoFolders(songs: List<Song>): List<Folder> {
+        // Group by the full parent path, not just the folder name. Otherwise /Music/English
+        // and /Download/English incorrectly become one folder.
         return songs.groupBy { song ->
             val path = song.path
-            if (path.isBlank()) "Media Library" else File(path).parentFile?.name ?: "Root"
-        }.map { (folderName, folderSongs) ->
-            val firstPath = folderSongs.first().path
-            val parentPath = if (firstPath.isBlank()) "media://library" else File(firstPath).parent ?: "/"
+            if (path.isBlank()) "media://library" else (File(path).parent ?: "/")
+        }.map { (parentPath, folderSongs) ->
+            val folderName = if (parentPath == "media://library") {
+                "Media Library"
+            } else {
+                File(parentPath).name.ifBlank { "Root" }
+            }
             Folder(
                 name = folderName,
                 path = parentPath,
                 songCount = folderSongs.size
             )
-        }.sortedBy { it.name.lowercase() }
+        }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }.thenBy { it.path })
     }
 }

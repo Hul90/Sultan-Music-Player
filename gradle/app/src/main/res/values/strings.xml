@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">Sultan Music Player</string>
+    <string name="notification_channel_name">Sultan Music Player Playback</string>
+    <string name="notification_channel_description">Music playback controls and media notification</string>
+    <string name="notification_preparing">Preparing playback…</string>
+</resources>

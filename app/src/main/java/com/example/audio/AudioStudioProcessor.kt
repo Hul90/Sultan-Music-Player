@@ -129,7 +129,7 @@ object AudioStudioProcessor {
                         sourceChannels = channels
                         val stereoFormat = AudioProcessor.AudioFormat(sampleRate, 2, C.ENCODING_PCM_16BIT)
                         sonic.configure(stereoFormat)
-                        sonic.flush(AudioProcessor.StreamMetadata.DEFAULT)
+                        sonic.flush()
                         sonicActive = sonic.isActive()
                         outputSampleRate = sampleRate
                         configured = true

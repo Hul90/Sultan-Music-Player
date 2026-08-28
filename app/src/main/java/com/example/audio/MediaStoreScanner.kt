@@ -202,6 +202,6 @@ object MediaStoreScanner {
                 path = parentPath,
                 songCount = folderSongs.size
             )
-        }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }.thenBy { it.path })
+        }.sortedWith(compareBy<Folder>(String.CASE_INSENSITIVE_ORDER) { it.name }.thenBy { it.path })
     }
 }
